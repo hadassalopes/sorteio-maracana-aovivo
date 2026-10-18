@@ -349,6 +349,8 @@
     .historico { margin:0 0 10px; padding:0; list-style:none; max-height:120px; overflow:auto; }
     .historico li { font-size:12px; padding:3px 0; border-top:1px solid #eee; }
     .modal-card.auditoria { max-height: 100%; overflow:auto; -webkit-overflow-scrolling: touch; }
+    .zerar { width:auto; display:block; margin:10px auto 0; padding:4px 8px; background:transparent; color:var(--vermelho); font:bold 14px Arial, Helvetica, sans-serif; text-decoration:underline; box-shadow:none; }
+    .excluidos { margin: 4px 0 0; text-align:center; font-size:12px; font-weight:bold; color: rgba(255,255,255,.95); }
     .atualizado { margin: 6px 0 0; text-align:center; font-size:11px; color: rgba(255,255,255,.85); }
     html { -webkit-text-size-adjust: 100%; }
     @supports not (height: 100dvh) {
@@ -374,7 +376,8 @@
     <h1>Sorteio<br>Dia das Crianças</h1>
     <p class="sub" id="sub">Ao vivo · 18 de outubro</p>
     <div class="total"><b id="pill-total">…</b><span>números participando</span></div>
-    <p class="atualizado" id="atualizado">lista atualizada às 12:44</p>
+    <p class="atualizado" id="atualizado">lista atualizada às 12:50</p>
+    <p class="excluidos" id="excluidos" hidden></p>
     <div class="miolo">
       <div class="janela" id="janela">
         <span class="ponteiro esq" aria-hidden="true"></span>
@@ -407,6 +410,7 @@
           <button id="auditoria-fechar" type="button">Fechar</button>
           <button id="auditoria-baixar" type="button">Baixar JSON</button>
         </div>
+        <button class="zerar" id="auditoria-zerar" type="button">Zerar histórico</button>
       </div>
     </div>
     <div class="modal" id="modal" hidden>
@@ -741,6 +745,8 @@ if (typeof module !== 'undefined' && module.exports) module.exports = SorteioPur
   var HASH = SorteioPuro.sha256Hex(CANON);
   var NUMS = LISTA.map(function (p) { return String(p.numero); });
   var ALTURA = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--altura'), 10) || 176;
+  var CHAVE = 'sorteio_maracana_historico_' + HASH.slice(0, 16);
+  var TESTE = /(?:\?|&)teste=1(?:&|$)/.test(location.search);
   var historico = [], ocupado = false, modalAberto = false;
   var $ = function (id) { return document.getElementById(id); };
   var el = { janela: $('janela'), reel: $('reel'), status: $('status'), resultado: $('resultado'), nome: $('nome'),
@@ -813,7 +819,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = SorteioPur
     $('aud-codigo').textContent = mascara(r.codigo);
     $('aud-quando').textContent = r.quando;
     $('aud-hash').textContent = r.sha256_lista;
-    $('aud-indice').textContent = 'Índice ' + r.indice + ' de ' + r.quantidade + ' · números ' + NUMS[0] + ' ao ' + NUMS[NUMS.length - 1];
+    $('aud-indice').textContent = 'Índice ' + r.indice + ' de ' + r.quantidade_elegivel + ' elegíveis (' + r.quantidade + ' na lista) · excluídos: ' + (r.numeros_excluidos.length ? r.numeros_excluidos.join(', ') : 'nenhum') + ' · SHA-256 elegíveis: ' + r.sha256_elegiveis;
     var ul = $('aud-historico'); ul.innerHTML = '';
     historico.forEach(function (h) { var li = document.createElement('li'); li.textContent = h.ordem + 'º · nº ' + h.numero + ' · ' + h.primeiro_nome + ' · ' + h.quando; ul.appendChild(li); });
   }
@@ -823,24 +829,45 @@ if (typeof module !== 'undefined' && module.exports) module.exports = SorteioPur
     el.btn.disabled = el.deNovo.disabled = true; el.erro.hidden = true;
     el.resultado.hidden = true; el.ver.hidden = true; el.painel.hidden = true;
     el.status.textContent = 'Os números estão girando…';
-    var s = indiceUniforme(LISTA.length), g = LISTA[s.indice];
+    var excl = historico.map(function (h) { return h.numero; });
+    var ELEG = LISTA.filter(function (p) { return excl.indexOf(p.numero) < 0; });
+    if (!ELEG.length) { ocupado = false; el.btn.disabled = el.deNovo.disabled = false; el.status.textContent = 'Todos os números já foram sorteados.'; return; }
+    var hashEleg = SorteioPuro.sha256Hex(ELEG.map(function (p) { return p.numero + '|' + p.codigo + '|' + p.nome; }).join('\n'));
+    var s = indiceUniforme(ELEG.length), g = ELEG[s.indice];
     var reg = { ordem: historico.length + 1, quando: SorteioPuro.carimboDeData(new Date()), quantidade: LISTA.length,
-      sha256_lista: HASH, indice: s.indice, tentativas_rejeicao: s.tentativas, numero: g.numero, codigo: g.codigo,
+      sha256_lista: HASH, quantidade_elegivel: ELEG.length, numeros_excluidos: excl, sha256_elegiveis: hashEleg,
+      indice: s.indice, indice_sobre: 'lista de elegíveis ordenada por número', tentativas_rejeicao: s.tentativas, numero: g.numero, codigo: g.codigo,
       primeiro_nome: g.nome, tipo: novamente ? 'novamente' : 'primeiro' };
     historico.push(reg);
-    try { localStorage.setItem('sorteio_maracana_historico', JSON.stringify(historico)); } catch (e) {}
-    pouso(sequencia(String(g.numero))).then(function () {
+    if (!TESTE) try { localStorage.setItem(CHAVE, JSON.stringify(historico)); } catch (e) {}
+    var NUMS_TODOS = NUMS; NUMS = ELEG.map(function (p) { return String(p.numero); });
+    var seq = sequencia(String(g.numero)); NUMS = NUMS_TODOS;
+    pouso(seq).then(function () {
       el.nome.textContent = g.nome || 'Participante';
       el.resultado.hidden = false; el.btn.hidden = true; el.deNovo.hidden = false; el.ver.hidden = false;
-      el.status.textContent = ''; preencherAuditoria(); confete();
+      el.status.textContent = ''; preencherAuditoria(); notaExcluidos(); confete();
       ocupado = false; el.deNovo.disabled = false;
     });
   }
 
+  function notaExcluidos() {
+    var n = historico.length, e = $('excluidos');
+    e.hidden = !n; e.textContent = n ? n + (n > 1 ? ' já sorteados fora deste sorteio' : ' já sorteado fora deste sorteio') : '';
+  }
+  if (TESTE) { $('selo').textContent = 'MODO TESTE'; $('selo').hidden = false; }
+  if (!TESTE) try { var salvo = JSON.parse(localStorage.getItem(CHAVE) || '[]'); if (Array.isArray(salvo)) historico = salvo; } catch (e) {}
+  $('auditoria-zerar').addEventListener('click', function () {
+    if (ocupado || !confirm('Zerar o histórico deste aparelho? Os números já sorteados voltam a participar.')) return;
+    historico = []; try { localStorage.removeItem(CHAVE); } catch (e) {}
+    el.painel.hidden = true; el.resultado.hidden = true; el.ver.hidden = true; el.deNovo.hidden = true;
+    el.btn.hidden = false; el.btn.disabled = false; pronto(); notaExcluidos();
+  if (historico.length) { preencherAuditoria(); el.ver.hidden = false; } notaExcluidos(); el.status.textContent = 'Tudo pronto para sortear.';
+  });
   $('pill-total').textContent = String(LISTA.length);
   $('sub').textContent = 'Ao vivo · 18 de outubro';
   el.status.textContent = 'Tudo pronto para sortear.';
-  el.btn.disabled = false; pronto();
+  el.btn.disabled = false; pronto(); notaExcluidos();
+  if (historico.length) { preencherAuditoria(); el.ver.hidden = false; }
   el.btn.addEventListener('click', function () { executar(false); });
   el.deNovo.addEventListener('click', function () {
     if (ocupado || modalAberto) return; modalAberto = true; el.modal.hidden = false;
